@@ -1,6 +1,7 @@
 import ApiKey, { ApiKeyPermission } from '../models/ApiKey';
 import User from '../models/User';
 import crypto from 'crypto';
+import { Op } from 'sequelize';
 
 interface CreateApiKeyDto {
   name: string;
@@ -54,26 +55,26 @@ class ApiKeyService {
     userId: string,
     dto: CreateApiKeyDto
   ): Promise<{ apiKey: ApiKey; plainKey: string }> {
-    console.log('Starting createApiKey for user:', userId);
-    
     // Validate expiry format
     const expiryRegex = /^(\d+)(m|h|d|w|M|y)$/i;
     if (!expiryRegex.test(dto.expiry)) {
       throw new Error('Invalid expiry format. Use: 30m, 1h, 1d, 1w, 1M, 1y');
     }
 
-    // Check active key count
+    // Check active key count - ONLY count keys that are active AND not expired
     const activeKeysCount = await ApiKey.count({
       where: {
         userId,
         isActive: true,
+        expiresAt: {
+          [Op.gt]: new Date() // Only count keys that haven't expired
+        }
       },
     });
 
-    console.log('Active keys count:', activeKeysCount);
     
     if (activeKeysCount >= 5) {
-      throw new Error('Maximum of 5 active API keys allowed per user');
+      throw new Error('Maximum of 5 active API keys allowed per user. Please revoke or wait for some keys to expire.');
     }
 
     // Validate permissions
@@ -89,36 +90,28 @@ class ApiKeyService {
     const expiresAt = this.calculateExpiry(dto.expiry);
     const plainKey = this.generateKey();
     
-    console.log('Generated plain key:', plainKey.substring(0, 20) + '...');
-    console.log('Expires at:', expiresAt);
-    
     // Generate hash manually
     const keyHash = ApiKey.hashString(plainKey);
-    console.log('Generated key hash:', keyHash.substring(0, 20) + '...');
-    
     const keyPrefix = plainKey.substring(0, 8);
-    console.log('Key prefix:', keyPrefix);
 
+    
     try {
-      // Create and save API key - use raw creation without hooks
+      // Create and save API key
       const apiKey = await ApiKey.create({
         userId,
         name: dto.name,
         permissions: dto.permissions,
         expiresAt,
         isActive: true,
-        keyHash,  // This MUST be set
-        keyPrefix, // This MUST be set
+        keyHash,
+        keyPrefix,
         lastUsedAt: null,
         revokedAt: null,
       });
 
-      console.log('API key created successfully with ID:', apiKey.id);
       
       return { apiKey, plainKey };
     } catch (error: any) {
-      console.error('Error in ApiKey.create():', error.message);
-      console.error('Error details:', error.errors);
       throw error;
     }
   }
@@ -131,12 +124,28 @@ class ApiKeyService {
       include: [{ model: User }],
     });
 
-    if (apiKey && apiKey.isValid()) {
-      await apiKey.updateLastUsed();
-      return apiKey;
+    if (!apiKey) {
+      return null;
     }
 
-    return null;
+    // Check if key is expired
+    if (apiKey.isExpired()) {
+      // Auto-deactivate expired keys
+      if (apiKey.isActive) {
+        apiKey.isActive = false;
+        await apiKey.save();
+      }
+      return null;
+    }
+    
+    // Check if key is active
+    if (!apiKey.isActive) {
+      return null;
+    }
+
+    // Update last used timestamp
+    await apiKey.updateLastUsed();
+    return apiKey;
   }
 
   async rolloverApiKey(
@@ -155,8 +164,23 @@ class ApiKeyService {
       throw new Error('API key not found');
     }
 
-    if (!expiredKey.isExpired()) {
+    if (!expiredKey.isExpired() && expiredKey.isActive) {
       throw new Error('Key must be expired to rollover');
+    }
+
+    // Check active key count before creating new one
+    const activeKeysCount = await ApiKey.count({
+      where: {
+        userId,
+        isActive: true,
+        expiresAt: {
+          [Op.gt]: new Date()
+        }
+      },
+    });
+
+    if (activeKeysCount >= 5) {
+      throw new Error('Maximum of 5 active API keys allowed per user. Please revoke some keys first.');
     }
 
     const expiresAt = this.calculateExpiry(expiry);
@@ -176,10 +200,12 @@ class ApiKeyService {
       revokedAt: null,
     });
 
-    // Deactivate the old key
-    expiredKey.isActive = false;
-    expiredKey.revokedAt = new Date();
-    await expiredKey.save();
+    // Deactivate the old key (if not already deactivated)
+    if (expiredKey.isActive) {
+      expiredKey.isActive = false;
+      expiredKey.revokedAt = new Date();
+      await expiredKey.save();
+    }
 
     return { apiKey: newApiKey, plainKey };
   }
@@ -202,6 +228,20 @@ class ApiKeyService {
   }
 
   async getUserApiKeys(userId: string): Promise<ApiKey[]> {
+    // First, auto-deactivate any expired keys
+    const expiredKeys = await ApiKey.findAll({
+      where: {
+        userId,
+        isActive: true,
+        expiresAt: { [Op.lt]: new Date() },
+      },
+    });
+
+    for (const key of expiredKeys) {
+      key.isActive = false;
+      await key.save();
+    }
+
     return await ApiKey.findAll({
       where: { userId },
       order: [['createdAt', 'DESC']],
@@ -213,13 +253,28 @@ class ApiKeyService {
       { isActive: false },
       {
         where: {
-          expiresAt: { $lt: new Date() },
+          expiresAt: { [Op.lt]: new Date() },
           isActive: true,
         },
       }
     );
     
     return affectedRows;
+  }
+
+  // New method to check if user can create more keys
+  async canCreateMoreKeys(userId: string): Promise<boolean> {
+    const activeKeysCount = await ApiKey.count({
+      where: {
+        userId,
+        isActive: true,
+        expiresAt: {
+          [Op.gt]: new Date()
+        }
+      },
+    });
+
+    return activeKeysCount < 5;
   }
 }
 

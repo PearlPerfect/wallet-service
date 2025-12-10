@@ -37,8 +37,6 @@ export class ApiKeyController {
           error: error.details[0].message 
         });
       }
-
-      console.log('Creating API key for user:', req.user!.id);
       
       const result = await apiKeyService.createApiKey(
         req.user!.id,
@@ -48,8 +46,6 @@ export class ApiKeyController {
           expiry: value.expiry,
         }
       );
-
-      console.log('API key created successfully:', result.apiKey.id);
 
       res.status(201).json({
         success: true,
@@ -61,7 +57,6 @@ export class ApiKeyController {
         warning: 'Save this API key now. It will not be shown again.',
       });
     } catch (error: any) {
-      console.error('Error creating API key:', error);
       res.status(400).json({ 
         success: false,
         error: error.message 
@@ -115,7 +110,7 @@ export class ApiKeyController {
           permissions: key.permissions,
           expires_at: key.expiresAt,
           is_active: key.isActive,
-          is_expired: key.isExpired(),
+          is_expired: key.isExpired(), // This will be true if expired
           created_at: key.createdAt,
           revoked_at: key.revokedAt,
           last_used_at: key.lastUsedAt,

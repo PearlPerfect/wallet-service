@@ -78,7 +78,6 @@ export class WalletController {
         });
       }
     } catch (error: any) {
-      console.error('Webhook error:', error);
       res.status(500).json({ 
         success: false,
         error: 'Webhook processing failed' 

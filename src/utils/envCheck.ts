@@ -27,6 +27,5 @@ export function validateEnvironment() {
     console.error('\nPlease update your .env file and try again.');
     process.exit(1);
   }
-
   console.log('All required environment variables are present.');
 }

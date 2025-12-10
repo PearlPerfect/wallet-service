@@ -6,11 +6,14 @@
     "start": "node dist/index.js",
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
+    "vercel-build": "npm run build",
     "db:create": "createdb wallet_service",
     "db:drop": "dropdb wallet_service",
-    "db:reset": "npm run db:drop && npm run db:create && npm run db:migrate",
-    "db:migrate": "ts-node src/utils/database.ts",
+    "db:reset": "npm run db:drop && npm run db:create",
     "test": "jest"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "keywords": [],
   "author": "",
@@ -33,6 +36,7 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "pg": "^8.16.3",
+    "pg-connection-string": "^2.9.1",
     "sequelize": "^6.37.7",
     "sequelize-cli": "^6.6.3",
     "sequelize-typescript": "^2.1.6",
@@ -51,6 +55,7 @@
     "@types/morgan": "^1.9.10",
     "@types/node": "^24.10.2",
     "@types/pg": "^8.15.6",
+    "@types/pg-connection-string": "^2.0.0",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "@types/uuid": "^11.0.0",

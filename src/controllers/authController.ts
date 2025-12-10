@@ -8,6 +8,7 @@ import Joi from 'joi';
 
 const redirectUri = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/google/callback`;
 
+// Initialize OAuth2Client
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -21,13 +22,20 @@ const testLoginSchema = Joi.object({
 
 export class AuthController {
   static async googleAuth(req: Request, res: Response) {
-    const url = client.generateAuthUrl({
-      access_type: 'offline',
-      scope: ['profile', 'email'],
-      prompt: 'consent',
-      redirect_uri: redirectUri
-    });
-    res.redirect(url);
+    try {
+      const url = client.generateAuthUrl({
+        access_type: 'offline',
+        scope: ['profile', 'email'],
+        prompt: 'consent',
+        redirect_uri: redirectUri
+      });
+      res.redirect(url);
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        error: 'Failed to initiate Google OAuth' 
+      });
+    }
   }
 
   static async googleCallback(req: Request, res: Response) {
@@ -40,12 +48,15 @@ export class AuthController {
           error: 'Authorization code missing' 
         });
       }
-
       const { tokens } = await client.getToken(code as string);
       client.setCredentials(tokens);
 
+      if (!tokens.id_token) {
+        throw new Error('No ID token received from Google');
+      }
+
       const ticket = await client.verifyIdToken({
-        idToken: tokens.id_token!,
+        idToken: tokens.id_token,
         audience: process.env.GOOGLE_CLIENT_ID,
       });
 
@@ -53,11 +64,17 @@ export class AuthController {
       if (!payload) {
         return res.status(400).json({ 
           success: false,
-          error: 'Failed to get user info' 
+          error: 'Failed to get user info from Google' 
         });
       }
 
-      let user = await User.findOne({ where: { email: payload.email } });
+
+      // Find or create user
+      let user = await User.findOne({ 
+        where: { 
+          email: payload.email 
+        } 
+      });
       
       if (!user) {
         user = await User.create({
@@ -67,18 +84,35 @@ export class AuthController {
           profilePicture: payload.picture,
         });
 
+
+        // Create wallet for new user
+        const walletNumber = generateWalletNumber();
         await Wallet.create({
           userId: user.id,
-          walletNumber: generateWalletNumber(),
+          walletNumber: walletNumber,
           balance: 0.00,
         });
+      } else {
+        
+        // Update user details if needed
+        if (!user.googleId) {
+          user.googleId = payload.sub;
+          await user.save();
+          console.log('Updated user with Google ID');
+        }
       }
 
+      // Generate JWT token
       const token = jwtService.generateToken({
         userId: user.id,
         email: user.email,
       });
 
+      
+      // Get wallet info
+      const wallet = await Wallet.findOne({ where: { userId: user.id } });
+      
+      // Return JSON response directly
       res.json({
         success: true,
         token,
@@ -87,13 +121,36 @@ export class AuthController {
           email: user.email,
           fullName: user.fullName,
           profilePicture: user.profilePicture,
+          googleId: user.googleId,
+          createdAt: user.createdAt
         },
+        wallet: wallet ? {
+          id: wallet.id,
+          walletNumber: wallet.walletNumber,
+          balance: wallet.balance,
+          createdAt: wallet.createdAt
+        } : null,
+        message: 'Google authentication successful. Use this token in Authorization header as Bearer token.',
+        instructions: {
+          authorization: 'Add this header to your requests:',
+          header: 'Authorization: Bearer ' + token,
+          endpoints: [
+            'GET /auth/me - Get current user info',
+            'POST /keys/create - Create API key',
+            'GET /wallet/balance - Check wallet balance',
+            'POST /wallet/deposit - Deposit funds',
+            'POST /wallet/transfer - Transfer to another wallet'
+          ]
+        }
       });
+      
     } catch (error: any) {
-      console.error('Google auth error:', error);
+      
+      // Return error as JSON
       res.status(500).json({ 
         success: false,
-        error: 'Authentication failed' 
+        error: error.message || 'Authentication failed',
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
     }
   }
@@ -109,23 +166,54 @@ export class AuthController {
       }
 
       const { email, fullName } = value;
-      const mockUserId = `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Check if user already exists
+      let user = await User.findOne({ where: { email } });
+      
+      if (!user) {
+        user = await User.create({
+          email,
+          fullName,
+        });
+
+        // Create wallet for test user
+        await Wallet.create({
+          userId: user.id,
+          walletNumber: generateWalletNumber(),
+          balance: 0.00,
+        });
+      }
+
+      // Get wallet info
+      const wallet = await Wallet.findOne({ where: { userId: user.id } });
       
       const token = jwtService.generateToken({
-        userId: mockUserId,
-        email,
+        userId: user.id,
+        email: user.email,
       });
 
+      
       res.json({
         success: true,
         token,
         user: {
-          id: mockUserId,
-          email,
-          fullName,
-          profilePicture: null,
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          profilePicture: user.profilePicture,
+          createdAt: user.createdAt
         },
-        note: 'This is a test login. In production, use Google OAuth.'
+        wallet: wallet ? {
+          id: wallet.id,
+          walletNumber: wallet.walletNumber,
+          balance: wallet.balance,
+          createdAt: wallet.createdAt
+        } : null,
+        note: 'This is a test login. In production, use Google OAuth.',
+        instructions: {
+          authorization: 'Add this header to your requests:',
+          header: 'Authorization: Bearer ' + token
+        }
       });
     } catch (error: any) {
       res.status(500).json({ 
@@ -144,14 +232,152 @@ export class AuthController {
         });
       }
 
+      // Get user with wallet info
+      const user = await User.findByPk(req.user.id, {
+        include: [{
+          model: Wallet,
+          attributes: ['id', 'walletNumber', 'balance', 'createdAt']
+        }]
+      });
+
+      if (!user) {
+        return res.status(404).json({ 
+          success: false,
+          error: 'User not found' 
+        });
+      }
+
       res.json({
         success: true,
         user: {
-          id: req.user.id,
-          email: req.user.email,
-          fullName: req.user.fullName,
-          profilePicture: req.user.profilePicture,
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          profilePicture: user.profilePicture,
+          googleId: user.googleId,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt
         },
+        wallet: user.wallet ? {
+          id: user.wallet.id,
+          walletNumber: user.wallet.walletNumber,
+          balance: user.wallet.balance,
+          currency: 'NGN',
+          createdAt: user.wallet.createdAt
+        } : null
+      });
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+  }
+
+  static async refreshToken(req: Request, res: Response) {
+    try {
+      const { token } = req.body;
+      
+      if (!token) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'Token is required' 
+        });
+      }
+
+      const newToken = jwtService.refreshToken(token);
+      
+      if (!newToken) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'Invalid or expired token' 
+        });
+      }
+
+      res.json({
+        success: true,
+        token: newToken,
+        message: 'Token refreshed successfully'
+      });
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+  }
+
+  static async logout(req: Request, res: Response) {
+    try {
+      // Note: JWT is stateless, so we can't really "logout" on server-side
+      // Client should discard the token
+      
+      res.json({
+        success: true,
+        message: 'Logout successful. Please discard your token on the client side.',
+        instructions: 'Delete the JWT token from client storage (localStorage, cookies, etc.)'
+      });
+    } catch (error: any) {
+      console.error('Logout error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+  }
+
+  static async getUserProfile(req: Request, res: Response) {
+    try {
+      const { userId } = req.params;
+      
+      if (!req.user) {
+        return res.status(401).json({ 
+          success: false,
+          error: 'User not authenticated' 
+        });
+      }
+
+      // Users can only view their own profile
+      if (userId !== req.user.id) {
+        return res.status(403).json({ 
+          success: false,
+          error: 'Access denied. You can only view your own profile.' 
+        });
+      }
+
+      const user = await User.findByPk(userId, {
+        include: [{
+          model: Wallet,
+          attributes: ['id', 'walletNumber', 'balance', 'createdAt']
+        }],
+        attributes: ['id', 'email', 'fullName', 'profilePicture', 'googleId', 'createdAt', 'updatedAt']
+      });
+
+      if (!user) {
+        return res.status(404).json({ 
+          success: false,
+          error: 'User not found' 
+        });
+      }
+
+      res.json({
+        success: true,
+        user: {
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          profilePicture: user.profilePicture,
+          googleId: user.googleId,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt
+        },
+        wallet: user.wallet ? {
+          id: user.wallet.id,
+          walletNumber: user.wallet.walletNumber,
+          balance: user.wallet.balance,
+          currency: 'NGN',
+          createdAt: user.wallet.createdAt
+        } : null
       });
     } catch (error: any) {
       res.status(500).json({ 
