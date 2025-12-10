@@ -20,6 +20,9 @@ const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const isProduction = NODE_ENV === 'production';
 
+// Always enable Swagger in both environments
+const enableSwagger = process.env.ENABLE_SWAGGER !== 'false'; // Default: true
+
 if (isProduction) {
   app.set('trust proxy', 1);
   console.log('🌐 Production mode: Trust proxy enabled');
@@ -28,17 +31,35 @@ if (isProduction) {
 // Middleware
 app.use(cors(corsOptions));
 app.use(helmet({
-  contentSecurityPolicy: isProduction ? undefined : false, 
-  crossOriginEmbedderPolicy: isProduction,
+  contentSecurityPolicy: isProduction ? {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https:", "data:"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      fontSrc: ["'self'", "https:", "data:"],
+    }
+  } : false,
+  crossOriginEmbedderPolicy: false,
 }));
 app.use(morgan(isProduction ? 'combined' : 'dev'));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// Swagger Documentation - Only in development or with environment variable
-if (!isProduction || process.env.ENABLE_SWAGGER === 'true') {
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+// Swagger Documentation - Always enabled unless explicitly disabled
+if (enableSwagger) {
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: "Wallet Service API",
+    swaggerOptions: {
+      persistAuthorization: true,
+      docExpansion: 'list',
+      filter: true,
+    }
+  }));
   console.log('📚 Swagger UI available at /api-docs');
+} else {
+  console.log('🚫 Swagger UI disabled (ENABLE_SWAGGER=false)');
 }
 
 // Health check with detailed information
@@ -64,6 +85,12 @@ app.get('/health', (req, res) => {
     database: {
       connected: true,
       type: 'PostgreSQL',
+    },
+    features: {
+      swagger_enabled: enableSwagger,
+      authentication: true,
+      paystack_integration: true,
+      api_keys: true,
     }
   };
   
@@ -79,9 +106,7 @@ app.get('/', (req, res) => {
     description: 'A secure wallet service with Paystack integration',
     version: '1.0.0',
     environment: NODE_ENV,
-    documentation: !isProduction || process.env.ENABLE_SWAGGER === 'true' 
-      ? `${baseUrl}/api-docs` 
-      : 'Disabled in production',
+    documentation: enableSwagger ? `${baseUrl}/api-docs` : 'Disabled (set ENABLE_SWAGGER=true to enable)',
     endpoints: {
       authentication: {
         google_oauth: `${baseUrl}/auth/google`,
@@ -95,6 +120,7 @@ app.get('/', (req, res) => {
         balance: `${baseUrl}/wallet/balance`,
         transactions: `${baseUrl}/wallet/transactions`,
         details: `${baseUrl}/wallet/details`,
+        public_status: `${baseUrl}/wallet/deposit/{reference}/public-status`,
       },
       api_keys: {
         create: `${baseUrl}/keys/create`,
@@ -107,9 +133,11 @@ app.get('/', (req, res) => {
       authentication: 'Use Google OAuth or test login to get JWT token',
       authorization: 'Add "Authorization: Bearer <token>" header to requests',
       api_keys: 'For service-to-service communication, use "x-api-key" header',
+      testing: 'For Paystack test payments, use card: 4084084084084081',
     },
     status: 'operational',
     timestamp: new Date().toISOString(),
+    swagger_enabled: enableSwagger,
   };
   
   res.json(response);
@@ -147,8 +175,13 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(statusCode).json(errorResponse);
 });
 
-// 404 handler
+// 404 handler - EXCLUDE /api-docs from 404 if Swagger is enabled
 app.use((req: express.Request, res: express.Response) => {
+  // Don't show 404 for /api-docs if Swagger is enabled
+  if (enableSwagger && req.originalUrl === '/api-docs') {
+    return res.redirect('/api-docs/'); // Redirect to trailing slash
+  }
+  
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   
   res.status(404).json({
@@ -161,10 +194,8 @@ app.use((req: express.Request, res: express.Response) => {
       authentication: `${baseUrl}/auth`,
       wallet: `${baseUrl}/wallet`,
       api_keys: `${baseUrl}/keys`,
+      documentation: enableSwagger ? `${baseUrl}/api-docs` : undefined,
     },
-    documentation: !isProduction || process.env.ENABLE_SWAGGER === 'true' 
-      ? `${baseUrl}/api-docs` 
-      : undefined,
     timestamp: new Date().toISOString(),
   });
 });
@@ -199,6 +230,7 @@ let server: any;
 
 const startServer = async () => {
   try {
+  
     console.log('🔄 Connecting to database...');
     await syncDatabase(false);
     console.log('✅ Database synchronized successfully');
@@ -211,27 +243,37 @@ const startServer = async () => {
       console.log(`
 🎉 Server started successfully!
 🚀 Server running on port ${PORT}
-   Local: ${baseUrl}
-   ${renderUrl ? `Production: ${renderUrl}` : ''}
+
+📚 Documentation: ${enableSwagger ? `${serverUrl}/api-docs` : 'Disabled'}
+❤️  Health Check: ${serverUrl}/health
+🔐 Google OAuth: ${serverUrl}/auth/google
 
 📊 Database: Connected
 🛡️  Security: ${isProduction ? 'Production mode' : 'Development mode'}
       `);
+      
+      if (enableSwagger) {
+        console.log(`
+💡 Quick Start:
+1. Authenticate: ${serverUrl}/auth/google
+2. Test deposit: ${serverUrl}/api-docs/#/Wallet/post_wallet_deposit
+3. Use test card: 4084084084084081
+        `);
+      }
     });
     
     // Handle server errors
     server.on('error', (error: any) => {
       if (error.code === 'EADDRINUSE') {
-        console.error(`Port ${PORT} is already in use`);
+        console.error(`❌ Port ${PORT} is already in use`);
         process.exit(1);
       } else {
-        console.error('Server error:', error);
         process.exit(1);
       }
     });
     
   } catch (error: any) {
-    console.error('Failed to start server:', error.message);
+    console.error('❌ Failed to start server:', error.message);
     
     // Provide helpful error messages
     if (error.message.includes('ECONNREFUSED')) {
