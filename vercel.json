@@ -5,7 +5,11 @@
       "src": "api/index.ts",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": ["dist/**", "package.json"]
+        "includeFiles": [
+          "src/**",
+          "package.json",
+          "tsconfig.json"
+        ]
       }
     }
   ],
@@ -17,7 +21,8 @@
   ],
   "functions": {
     "api/index.ts": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "memory": 1024
     }
   },
   "env": {
