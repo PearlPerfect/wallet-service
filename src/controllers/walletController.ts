@@ -66,7 +66,6 @@ export class WalletController {
           error: 'Missing signature' 
         });
       }
-
       const result = await paystackService.handleWebhook(req.body, signature);
       
       if (result.success) {
