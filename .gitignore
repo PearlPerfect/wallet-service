@@ -350,4 +350,4 @@ env/
 *.swp
 *~
 \#*\#
-/.ekstrc
+/.ekstrc.env-prod
