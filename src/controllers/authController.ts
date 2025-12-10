@@ -6,8 +6,11 @@ import Wallet from '../models/Wallet';
 import { generateWalletNumber } from '../utils/database';
 import Joi from 'joi';
 
-const redirectUri = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/google/callback`;
+const frontendUrl = process.env.FRONTEND_URL?.endsWith('/') 
+  ? process.env.FRONTEND_URL.slice(0, -1) 
+  : process.env.FRONTEND_URL || 'http://localhost:3000';
 
+const redirectUri = `${frontendUrl}/auth/google/callback`;
 // Initialize OAuth2Client
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,

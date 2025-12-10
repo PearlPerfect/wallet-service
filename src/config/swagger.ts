@@ -18,6 +18,10 @@ const options = {
     },
     servers: [
       {
+        url: 'https://wallet-service-83s5.onrender.com',
+        description: 'Production server',
+      },
+      {
         url: 'http://localhost:3000',
         description: 'Development server',
       },
@@ -304,7 +308,6 @@ const options = {
       },
     ],
   },
-  // Include both routes and controllers
   apis: ['./src/routes/*.ts', './src/controllers/*.ts'],
 };
 

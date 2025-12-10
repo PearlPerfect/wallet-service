@@ -17,7 +17,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+
+app.set('trust proxy', true);
 app.use(cors(corsOptions));
 app.use(helmet());
 app.use(morgan('dev'));
@@ -96,8 +97,8 @@ const startServer = async () => {
       app.listen(PORT, () => {
         console.log(`
 🚀 Server running on port ${PORT}
-📚 API Documentation: http://localhost:${PORT}/api-docs
-`);
+📚 API Documentation: https://wallet-service-83s5.onrender.com/api-docs
+        `);
       });
     }
   } catch (error: any) {

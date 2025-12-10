@@ -20,8 +20,17 @@ const syncDatabase = async (force = false) => {
     User.hasMany(ApiKey, { foreignKey: 'userId', onDelete: 'CASCADE' });
     ApiKey.belongsTo(User, { foreignKey: 'userId' });
 
-    // Sync models
-    await sequelize.sync({ force });
+    // Sync models with alter option to update tables
+    const syncOptions: any = {};
+    
+    if (force) {
+      syncOptions.force = true;
+    } else {
+      // In production, use alter to safely update schema
+      syncOptions.alter = process.env.NODE_ENV !== 'production';
+    }
+    
+    await sequelize.sync(syncOptions);
     console.log('Database synced successfully.');
 
     // Create indexes
@@ -72,11 +81,14 @@ const createIndexes = async () => {
       `CREATE INDEX IF NOT EXISTS idx_api_keys_user_active ON api_keys("userId", "isActive", "expiresAt")`
     ];
 
+    console.log('Creating database indexes...');
+    
     for (const indexQuery of indexes) {
       try {
         await sequelize.query(indexQuery);
-      } catch (error) {
-        console.warn(`Index creation warning: ${error}`);
+      } catch (error: any) {
+        // Log warning but continue
+        console.warn(`Index creation warning: ${error.message}`);
       }
     }
     
@@ -88,6 +100,11 @@ const createIndexes = async () => {
 
 const createTestData = async () => {
   try {
+    if (process.env.NODE_ENV === 'production') {
+      console.log('Skipping test data creation in production');
+      return;
+    }
+
     // Create test user 1
     const user1 = await User.create({
       email: 'test1@example.com',
