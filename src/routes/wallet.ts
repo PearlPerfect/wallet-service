@@ -68,6 +68,106 @@ router.post(
 
 /**
  * @swagger
+ * /wallet/paystack/test-webhook:
+ *   post:
+ *     summary: Test Paystack webhook (for development)
+ *     description: Manually trigger a webhook event for testing
+ *     tags: [Wallet]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - reference
+ *               - event
+ *               - amount
+ *             properties:
+ *               reference:
+ *                 type: string
+ *               event:
+ *                 type: string
+ *                 enum: [charge.success, charge.failed]
+ *               amount:
+ *                 type: number
+ *     responses:
+ *       200:
+ *         description: Test webhook processed
+ *       400:
+ *         description: Invalid request
+ *       401:
+ *         description: Unauthorized
+ */
+router.post(
+  '/paystack/test-webhook',
+  authenticate,
+  async (req, res) => {
+    try {
+      const { reference, event, amount } = req.body;
+      
+      if (!reference || !event || !amount) {
+        return res.status(400).json({
+          success: false,
+          error: 'Reference, event, and amount are required'
+        });
+      }
+
+      // Create test webhook payload
+      const testPayload = {
+        event,
+        data: {
+          reference,
+          amount: amount * 100, // Convert to kobo
+          status: event === 'charge.success' ? 'success' : 'failed',
+          metadata: {
+            test: true,
+            userId: req.user?.id
+          }
+        }
+      };
+
+      // Generate a fake signature for testing
+      const testSignature = `test_sig_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      console.log('🧪 Test webhook triggered:', {
+        reference,
+        event,
+        amount,
+        user: req.user?.id
+      });
+
+      // Call the actual webhook handler
+      const result = await (WalletController as any).handleWebhook(
+        { body: testPayload, headers: { 'x-paystack-signature': testSignature } } as any,
+        res
+      );
+
+      // If handleWebhook already sent a response, return
+      if (res.headersSent) return;
+
+      res.json({
+        success: true,
+        message: 'Test webhook triggered',
+        reference,
+        event,
+        amount,
+        note: 'This only works if you have a pending transaction with this reference'
+      });
+    } catch (error: any) {
+      console.error('Test webhook error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
  * /wallet/deposit/{reference}/status:
  *   get:
  *     summary: Check deposit status
@@ -91,12 +191,18 @@ router.post(
  *             schema:
  *               type: object
  *               properties:
+ *                 success:
+ *                   type: boolean
  *                 reference:
  *                   type: string
  *                 status:
  *                   type: string
  *                 amount:
  *                   type: number
+ *                 balance:
+ *                   type: number
+ *                 credited:
+ *                   type: boolean
  *                 createdAt:
  *                   type: string
  *                   format: date-time

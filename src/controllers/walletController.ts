@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import Joi from 'joi';
 import paystackService from '../services/paystackService';
 import walletService from '../services/walletService';
-import Transaction from '../models/Transaction';
+import Transaction, { TransactionStatus } from '../models/Transaction';
 
 export class WalletController {
   private static depositSchema = Joi.object({
@@ -33,11 +33,18 @@ export class WalletController {
         `ref_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
       );
 
+      // Fix: Use absolute URL for callback
+      const frontendUrl = process.env.FRONTEND_URL?.endsWith('/') 
+        ? process.env.FRONTEND_URL.slice(0, -1) 
+        : process.env.FRONTEND_URL || 'http://localhost:3000';
+      
+      const callbackUrl = `${frontendUrl}/wallet/deposit/${transaction.reference}/status`;
+
       const response = await paystackService.initializeTransaction({
         email,
         amount: value.amount,
         reference: transaction.reference!,
-        callback_url: `${process.env.FRONTEND_URL}/deposit/callback`,
+        callback_url: callbackUrl,
       });
 
       res.json({
@@ -47,6 +54,8 @@ export class WalletController {
         amount: value.amount,
         status: 'pending',
         message: 'Payment initialized successfully',
+        transactionId: transaction.id,
+        callback_url: callbackUrl,
       });
     } catch (error: any) {
       res.status(500).json({ 
@@ -61,25 +70,36 @@ export class WalletController {
       const signature = req.headers['x-paystack-signature'] as string;
       
       if (!signature) {
+        console.log('⚠️ Webhook called without signature header');
         return res.status(400).json({ 
           success: false,
           error: 'Missing signature' 
         });
       }
+
+      console.log('✅ Webhook signature received:', signature.substring(0, 20) + '...');
+      console.log('📦 Webhook body:', JSON.stringify(req.body, null, 2));
+      console.log('🎯 Webhook event:', req.body?.event);
+      console.log('🔗 Webhook reference:', req.body?.data?.reference);
+      
       const result = await paystackService.handleWebhook(req.body, signature);
       
       if (result.success) {
-        res.json({ status: true });
+        console.log('✅ Webhook processed successfully');
+        res.status(200).json({ status: true, message: 'Webhook processed' });
       } else {
+        console.log('❌ Webhook processing failed:', result.message);
         res.status(400).json({ 
           success: false,
           error: result.message 
         });
       }
     } catch (error: any) {
+      console.error('🔥 Webhook error:', error);
       res.status(500).json({ 
         success: false,
-        error: 'Webhook processing failed' 
+        error: 'Webhook processing failed',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   }
@@ -99,21 +119,64 @@ export class WalletController {
         });
       }
 
-      if (transaction.status === 'success') {
+      // If already successful, return immediately
+      if (transaction.status === TransactionStatus.SUCCESS) {
+        const wallet = await walletService.getWalletByUserId(req.user!.id);
         return res.json({
+          success: true,
           reference: transaction.reference,
           status: transaction.status,
           amount: transaction.amount,
+          balance: wallet ? wallet.balance : 0,
           createdAt: transaction.createdAt,
+          credited: true,
         });
       }
 
+      // Verify with Paystack
       const paystackResponse = await paystackService.verifyTransaction(reference);
       
+      let credited = false;
+      
+      // Cast transaction status to string for comparison
+      const transactionStatus = transaction.status as string;
+      
+      // If Paystack says successful but our DB doesn't, trigger webhook logic
+      if (paystackResponse.data.status === 'success' && transactionStatus !== TransactionStatus.SUCCESS) {
+        console.log(`🔄 Manually triggering webhook logic for reference: ${reference}`);
+        
+        // Simulate webhook payload
+        const webhookPayload = {
+          event: 'charge.success',
+          data: {
+            reference: paystackResponse.data.reference,
+            amount: paystackResponse.data.amount,
+            status: paystackResponse.data.status,
+            metadata: paystackResponse.data.metadata
+          }
+        };
+        
+        // Process as if webhook came in
+        await paystackService.handleWebhook(webhookPayload, 'manual-trigger-' + reference);
+        credited = true;
+      }
+      
+      // Get updated transaction
+      const updatedTransaction = await Transaction.findOne({
+        where: { reference },
+      });
+
+      const wallet = await walletService.getWalletByUserId(req.user!.id);
+      
       res.json({
+        success: true,
         reference: paystackResponse.data.reference,
         status: paystackResponse.data.status,
         amount: paystackResponse.data.amount / 100,
+        balance: wallet ? wallet.balance : 0,
+        credited,
+        transaction_status: updatedTransaction?.status || transaction.status,
+        paystack_status: paystackResponse.data.status,
       });
     } catch (error: any) {
       res.status(500).json({ 

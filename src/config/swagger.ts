@@ -1,5 +1,24 @@
 import swaggerJsdoc from 'swagger-jsdoc';
 
+// Determine server URLs based on environment
+const isProduction = process.env.NODE_ENV === 'production';
+const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+const servers = [
+  {
+    url: baseUrl,
+    description: isProduction ? 'Production server' : 'Development server',
+  }
+];
+
+// Add Render URL if available in production
+if (isProduction && process.env.RENDER_EXTERNAL_URL) {
+  servers.unshift({
+    url: process.env.RENDER_EXTERNAL_URL,
+    description: 'Render production server',
+  });
+}
+
 const options = {
   definition: {
     openapi: '3.0.0',
@@ -16,16 +35,7 @@ const options = {
         url: 'https://opensource.org/licenses/MIT',
       },
     },
-    servers: [
-      {
-        url: 'https://wallet-service-83s5.onrender.com',
-        description: 'Production server',
-      },
-      {
-        url: 'http://localhost:3000',
-        description: 'Development server',
-      },
-    ],
+    servers,
     components: {
       securitySchemes: {
         BearerAuth: {
@@ -308,6 +318,7 @@ const options = {
       },
     ],
   },
+  // Include both routes and controllers
   apis: ['./src/routes/*.ts', './src/controllers/*.ts'],
 };
 
