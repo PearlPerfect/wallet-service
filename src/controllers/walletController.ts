@@ -33,12 +33,13 @@ export class WalletController {
         `ref_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
       );
 
-      // Fix: Use absolute URL for callback
+      // Use the webhook URL from environment for callback
       const frontendUrl = process.env.FRONTEND_URL?.endsWith('/') 
         ? process.env.FRONTEND_URL.slice(0, -1) 
         : process.env.FRONTEND_URL || 'http://localhost:3000';
       
-      const callbackUrl = `${frontendUrl}/wallet/deposit/${transaction.reference}/status`;
+      // Use public status endpoint for callback
+      const callbackUrl = `${frontendUrl}/wallet/deposit/${transaction.reference}/public-status`;
 
       const response = await paystackService.initializeTransaction({
         email,
@@ -56,8 +57,14 @@ export class WalletController {
         message: 'Payment initialized successfully',
         transactionId: transaction.id,
         callback_url: callbackUrl,
+        instructions: {
+          test_payment: 'Use test card: 4084084084084081',
+          webhook_status: 'Webhook URL: ' + process.env.WEBHOOK_URL,
+          check_status: `GET ${frontendUrl}/wallet/deposit/${transaction.reference}/public-status`
+        }
       });
     } catch (error: any) {
+      console.error('Deposit error:', error);
       res.status(500).json({ 
         success: false,
         error: error.message 
@@ -69,36 +76,31 @@ export class WalletController {
     try {
       const signature = req.headers['x-paystack-signature'] as string;
       
-      if (!signature) {
-        console.log('⚠️ Webhook called without signature header');
-        return res.status(400).json({ 
-          success: false,
-          error: 'Missing signature' 
-        });
-      }
-
-      console.log('✅ Webhook signature received:', signature.substring(0, 20) + '...');
-      console.log('📦 Webhook body:', JSON.stringify(req.body, null, 2));
-      console.log('🎯 Webhook event:', req.body?.event);
-      console.log('🔗 Webhook reference:', req.body?.data?.reference);
+      // Log all headers for debugging
+      console.log('📋 Webhook Headers:', JSON.stringify(req.headers, null, 2));
+      console.log('📦 Webhook Body:', JSON.stringify(req.body, null, 2));
       
       const result = await paystackService.handleWebhook(req.body, signature);
       
       if (result.success) {
         console.log('✅ Webhook processed successfully');
+        // Always return 200 to Paystack even if we had errors
         res.status(200).json({ status: true, message: 'Webhook processed' });
       } else {
         console.log('❌ Webhook processing failed:', result.message);
-        res.status(400).json({ 
-          success: false,
-          error: result.message 
+        // Still return 200 to Paystack to avoid retries
+        res.status(200).json({ 
+          status: false, 
+          message: result.message,
+          note: 'Logged error but returning 200 to prevent Paystack retries'
         });
       }
     } catch (error: any) {
       console.error('🔥 Webhook error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Webhook processing failed',
+      // IMPORTANT: Always return 200 to Paystack to prevent infinite retries
+      res.status(200).json({ 
+        status: false,
+        error: 'Webhook processing failed but acknowledged',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
@@ -130,6 +132,7 @@ export class WalletController {
           balance: wallet ? wallet.balance : 0,
           createdAt: transaction.createdAt,
           credited: true,
+          message: 'Payment already processed successfully'
         });
       }
 
@@ -137,28 +140,34 @@ export class WalletController {
       const paystackResponse = await paystackService.verifyTransaction(reference);
       
       let credited = false;
-      
-      // Cast transaction status to string for comparison
-      const transactionStatus = transaction.status as string;
+      let message = `Payment status: ${paystackResponse.data.status}`;
       
       // If Paystack says successful but our DB doesn't, trigger webhook logic
-      if (paystackResponse.data.status === 'success' && transactionStatus !== TransactionStatus.SUCCESS) {
-        console.log(`🔄 Manually triggering webhook logic for reference: ${reference}`);
+      if (paystackResponse.data.status === 'success') {
+        console.log(`🔄 Paystack reports success, checking if we need to credit wallet`);
         
-        // Simulate webhook payload
-        const webhookPayload = {
-          event: 'charge.success',
-          data: {
-            reference: paystackResponse.data.reference,
-            amount: paystackResponse.data.amount,
-            status: paystackResponse.data.status,
-            metadata: paystackResponse.data.metadata
-          }
-        };
+        // Cast to string to avoid TypeScript error
+        const currentStatus = transaction.status as string;
         
-        // Process as if webhook came in
-        await paystackService.handleWebhook(webhookPayload, 'manual-trigger-' + reference);
-        credited = true;
+        if (currentStatus !== TransactionStatus.SUCCESS) {
+          console.log(`🔄 Manually triggering webhook logic for reference: ${reference}`);
+          
+          // Simulate webhook payload
+          const webhookPayload = {
+            event: 'charge.success',
+            data: {
+              reference: paystackResponse.data.reference,
+              amount: paystackResponse.data.amount,
+              status: paystackResponse.data.status,
+              metadata: paystackResponse.data.metadata
+            }
+          };
+          
+          // Process as if webhook came in
+          await paystackService.handleWebhook(webhookPayload, 'manual-trigger-' + reference);
+          credited = true;
+          message = 'Payment successful! Wallet has been credited.';
+        }
       }
       
       // Get updated transaction
@@ -175,13 +184,119 @@ export class WalletController {
         amount: paystackResponse.data.amount / 100,
         balance: wallet ? wallet.balance : 0,
         credited,
+        message,
         transaction_status: updatedTransaction?.status || transaction.status,
         paystack_status: paystackResponse.data.status,
+        webhook_configured: !!process.env.WEBHOOK_URL,
       });
     } catch (error: any) {
+      console.error('Status check error:', error);
       res.status(500).json({ 
         success: false,
         error: error.message 
+      });
+    }
+  }
+
+  // NEW: Public status endpoint for Paystack callback
+  static async getPublicDepositStatus(req: Request, res: Response) {
+    try {
+      const { reference } = req.params;
+      const { trxref } = req.query;
+      
+      const actualReference = reference || trxref;
+      
+      if (!actualReference) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'No transaction reference provided' 
+        });
+      }
+
+      console.log('🌐 Public status check for reference:', actualReference);
+      
+      const transaction = await Transaction.findOne({
+        where: { reference: actualReference as string },
+      });
+
+      if (!transaction) {
+        return res.status(404).json({ 
+          success: false,
+          error: 'Transaction not found' 
+        });
+      }
+
+      // Verify with Paystack
+      const paystackResponse = await paystackService.verifyTransaction(actualReference as string);
+      
+      let credited = false;
+      let message = `Payment ${paystackResponse.data.status}`;
+      
+      // Cast to string to avoid TypeScript error
+      const currentStatus = transaction.status as string;
+      
+      // If Paystack says successful but our DB doesn't, trigger webhook logic
+      if (paystackResponse.data.status === 'success' && currentStatus !== TransactionStatus.SUCCESS) {
+        console.log(`🔄 Auto-triggering webhook for public status check: ${actualReference}`);
+        
+        const webhookPayload = {
+          event: 'charge.success',
+          data: {
+            reference: paystackResponse.data.reference,
+            amount: paystackResponse.data.amount,
+            status: paystackResponse.data.status,
+            metadata: paystackResponse.data.metadata
+          }
+        };
+        
+        await paystackService.handleWebhook(webhookPayload, 'public-status-' + actualReference);
+        credited = true;
+        message = '✅ Payment successful! Your wallet has been credited.';
+      }
+
+      // Get updated transaction
+      const updatedTransaction = await Transaction.findOne({
+        where: { reference: actualReference as string },
+      });
+
+      const wallet = await walletService.getWalletByUserId(transaction.userId);
+      
+      res.json({
+        success: true,
+        reference: paystackResponse.data.reference,
+        status: paystackResponse.data.status,
+        amount: paystackResponse.data.amount / 100,
+        balance: wallet ? wallet.balance : 0,
+        credited,
+        message,
+        transaction_status: updatedTransaction?.status || transaction.status,
+        next_steps: [
+          'Check your wallet balance at /wallet/balance',
+          'View transaction history at /wallet/transactions'
+        ]
+      });
+    } catch (error: any) {
+      console.error('Public status check error:', error);
+      
+      // Return HTML for browser users
+      if (req.headers['user-agent']?.includes('Mozilla')) {
+        return res.send(`
+          <html>
+          <head><title>Payment Status</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h1>Unable to Check Payment Status</h1>
+            <p>There was an error checking your payment status.</p>
+            <p>Error: ${error.message}</p>
+            <hr>
+            <p><a href="/api-docs">API Documentation</a></p>
+          </body>
+          </html>
+        `);
+      }
+      
+      res.status(500).json({ 
+        success: false,
+        error: 'Unable to check transaction status'
       });
     }
   }

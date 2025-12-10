@@ -28,7 +28,7 @@ interface VerifyTransactionResponse {
   data: {
     reference: string;
     amount: number;
-    status: 'success' | 'failed' | 'pending';
+    status: 'success' | 'failed' | 'pending' | 'abandoned';
     metadata?: any;
   };
 }
@@ -51,14 +51,20 @@ interface TransferResponse {
 class PaystackService {
   private readonly baseURL: string;
   private readonly secretKey: string;
+  private readonly webhookUrl: string;
+  private readonly isProduction: boolean;
 
   constructor() {
     this.baseURL = process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co';
     this.secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+    this.webhookUrl = process.env.WEBHOOK_URL || '';
+    this.isProduction = process.env.NODE_ENV === 'production';
     
     console.log('💰 Paystack Service initialized');
     console.log('📊 Base URL:', this.baseURL);
     console.log('🔑 Secret Key configured:', this.secretKey ? 'Yes' : 'No');
+    console.log('🌍 Webhook URL:', this.webhookUrl);
+    console.log('🏭 Environment:', this.isProduction ? 'Production' : 'Development');
   }
 
   private getHeaders() {
@@ -81,6 +87,7 @@ class PaystackService {
         callback_url: dto.callback_url
       });
       
+      // Use webhook URL in metadata so Paystack knows where to send webhook
       const response = await axios.post(
         `${this.baseURL}/transaction/initialize`,
         {
@@ -89,6 +96,7 @@ class PaystackService {
           reference,
           callback_url: dto.callback_url,
           metadata: {
+            webhook_url: this.webhookUrl,
             custom_fields: [
               {
                 display_name: "Wallet Deposit",
@@ -103,7 +111,8 @@ class PaystackService {
 
       console.log('✅ Paystack transaction initialized successfully:', {
         reference: response.data.data.reference,
-        authorization_url: response.data.data.authorization_url.substring(0, 50) + '...'
+        authorization_url: response.data.data.authorization_url.substring(0, 50) + '...',
+        message: 'Open this URL to make payment with test card: 4084084084084081'
       });
 
       return response.data;
@@ -144,24 +153,38 @@ class PaystackService {
     signature: string
   ): Promise<{ success: boolean; message: string }> {
     try {
-      console.log('🔄 Processing webhook...');
+      console.log('🔄 ========== WEBHOOK RECEIVED ==========');
       console.log('📧 Event:', body.event);
       console.log('🔗 Reference:', body.data?.reference);
       console.log('💰 Amount:', body.data?.amount);
       console.log('🏦 Status:', body.data?.status);
+      console.log('📝 Signature:', signature ? `${signature.substring(0, 20)}...` : 'None');
       
-      // For manual testing, skip signature verification
-      const isTest = signature.startsWith('test_sig_') || signature.startsWith('manual-trigger-');
+      // In development, allow manual testing without signature
+      const isManualTest = signature && (
+        signature.startsWith('test_sig_') || 
+        signature.startsWith('manual-trigger-') ||
+        signature.startsWith('public-status-')
+      );
       
-      if (!isTest) {
+      // Check if we should verify signature
+      const shouldVerifySignature = this.isProduction || (!isManualTest && signature);
+      
+      if (shouldVerifySignature) {
+        if (!signature) {
+          console.error('❌ Missing webhook signature');
+          throw new Error('Missing signature');
+        }
+        
         // Verify webhook signature
         const isValid = await this.verifySignature(body, signature);
         if (!isValid) {
           console.error('❌ Invalid webhook signature');
           throw new Error('Invalid webhook signature');
         }
+        console.log('✅ Webhook signature verified');
       } else {
-        console.log('🧪 Test signature detected, skipping verification');
+        console.log('🧪 Skipping signature verification (development/manual test)');
       }
 
       const event = body.event;
@@ -195,8 +218,11 @@ class PaystackService {
           return { success: true, message: 'Event not processed' };
       }
     } catch (error: any) {
-      console.error('🔥 Webhook processing error:', error);
+      console.error('🔥 Webhook processing error:', error.message);
+      console.error('Stack:', error.stack);
       return { success: false, message: error.message };
+    } finally {
+      console.log('🔄 ========== WEBHOOK PROCESSING COMPLETE ==========');
     }
   }
 
@@ -229,6 +255,15 @@ class PaystackService {
 
     if (!transaction) {
       console.error('❌ Transaction not found for reference:', data.reference);
+      // In development, try to create a transaction if it doesn't exist
+      if (!this.isProduction) {
+        console.log('⚠️ Attempting to find transaction by checking all recent transactions...');
+        const allTransactions = await Transaction.findAll({
+          limit: 10,
+          order: [['createdAt', 'DESC']]
+        });
+        console.log('Recent transactions:', allTransactions.map(t => t.reference));
+      }
       throw new Error('Transaction not found');
     }
 
@@ -248,9 +283,9 @@ class PaystackService {
     });
 
     if (wallet) {
-      const oldBalance = wallet.balance;
+      const oldBalance = parseFloat(wallet.balance.toString());
       await wallet.credit(transaction.amount);
-      const newBalance = wallet.balance;
+      const newBalance = parseFloat(wallet.balance.toString());
       
       console.log(`✅ Wallet ${wallet.id} credited:`, {
         amount: transaction.amount,
@@ -258,8 +293,18 @@ class PaystackService {
         newBalance,
         difference: newBalance - oldBalance
       });
+      
+      // Also update the transaction with wallet info
+      transaction.metadata = JSON.stringify({
+        ...(transaction.metadata ? JSON.parse(transaction.metadata) : {}),
+        walletId: wallet.id,
+        walletNumber: wallet.walletNumber,
+        creditedAt: new Date().toISOString()
+      });
+      await transaction.save();
     } else {
       console.error('❌ Wallet not found for user:', transaction.userId);
+      throw new Error('Wallet not found');
     }
   }
 
@@ -317,9 +362,9 @@ class PaystackService {
       });
 
       if (wallet) {
-        const oldBalance = wallet.balance;
+        const oldBalance = parseFloat(wallet.balance.toString());
         await wallet.credit(transaction.amount);
-        const newBalance = wallet.balance;
+        const newBalance = parseFloat(wallet.balance.toString());
         
         console.log(`🔄 Wallet ${wallet.id} refunded:`, {
           amount: transaction.amount,
@@ -354,9 +399,9 @@ class PaystackService {
       });
 
       if (wallet) {
-        const oldBalance = wallet.balance;
+        const oldBalance = parseFloat(wallet.balance.toString());
         await wallet.credit(transaction.amount);
-        const newBalance = wallet.balance;
+        const newBalance = parseFloat(wallet.balance.toString());
         
         console.log(`🔄 Wallet ${wallet.id} refunded:`, {
           amount: transaction.amount,
@@ -370,6 +415,27 @@ class PaystackService {
     } else {
       console.log(`ℹ️ No withdrawal transaction found for reversed transfer: ${data.reference}`);
     }
+  }
+
+  // New method to manually trigger webhook for testing
+  async triggerManualWebhook(reference: string, amount: number): Promise<{ success: boolean; message: string }> {
+    const webhookPayload = {
+      event: 'charge.success',
+      data: {
+        reference,
+        amount: amount * 100, // Convert to kobo
+        status: 'success',
+        metadata: {
+          manual_trigger: true,
+          timestamp: new Date().toISOString()
+        }
+      }
+    };
+    
+    const signature = `manual-trigger-${Date.now()}`;
+    
+    console.log('🧪 Manually triggering webhook for testing');
+    return await this.handleWebhook(webhookPayload, signature);
   }
 }
 

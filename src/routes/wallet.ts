@@ -168,6 +168,56 @@ router.post(
 
 /**
  * @swagger
+ * /wallet/deposit/{reference}/public-status:
+ *   get:
+ *     summary: Check deposit status (Public - no auth required)
+ *     description: Public endpoint for Paystack callback to check transaction status
+ *     tags: [Wallet]
+ *     parameters:
+ *       - in: path
+ *         name: reference
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Transaction reference
+ *     responses:
+ *       200:
+ *         description: Transaction status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 reference:
+ *                   type: string
+ *                 status:
+ *                   type: string
+ *                 amount:
+ *                   type: number
+ *                 balance:
+ *                   type: number
+ *                 credited:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 transaction_status:
+ *                   type: string
+ *                 paystack_status:
+ *                   type: string
+ *       404:
+ *         description: Transaction not found
+ *       500:
+ *         description: Internal server error
+ */
+router.get(
+  '/deposit/:reference/public-status',
+  WalletController.getPublicDepositStatus
+);
+
+/**
+ * @swagger
  * /wallet/deposit/{reference}/status:
  *   get:
  *     summary: Check deposit status
