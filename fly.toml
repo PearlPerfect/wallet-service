@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for wallet-service-nqap4q on 2025-12-10T12:56:03Z
+# fly.toml app configuration file generated for wallet-service-jf2muw on 2025-12-10T14:43:37Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'wallet-service-nqap4q'
+app = 'wallet-service-jf2muw'
 primary_region = 'lhr'
 
 [build]
