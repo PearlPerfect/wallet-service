@@ -1,15 +1,15 @@
-# fly.toml app configuration file generated for wallet-service-jf2muw on 2025-12-10T14:43:37Z
+# fly.toml app configuration file generated for wallet-service-nuhong on 2025-12-10T14:52:39Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'wallet-service-jf2muw'
+app = 'wallet-service-nuhong'
 primary_region = 'lhr'
 
 [build]
 
 [http_service]
-  internal_port = 3000
+  internal_port = 8080
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
