@@ -37,7 +37,6 @@ class User extends Model {
   @Column({
     type: DataType.STRING,
     allowNull: false,
-    field: 'fullName', // Explicit field name
   })
   fullName!: string;
 
@@ -63,6 +62,11 @@ class User extends Model {
 
   @HasMany(() => Transaction)
   transactions!: Transaction[];
+
+  @BeforeCreate
+  static async createWallet(user: User) {
+    
+  }
 }
 
 export default User;
