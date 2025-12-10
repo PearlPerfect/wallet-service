@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: wallet-service
+    env: node
+    plan: starter
+    buildCommand: "npm install --include=dev && npm run build"
+    startCommand: "npm start"
