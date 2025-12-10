@@ -6,7 +6,8 @@
     "start": "node dist/index.js",
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
-    "vercel-build": "npm install && npm run build",
+    "preinstall": "npm install pg --no-optional",
+    "vercel-build": "npm install --legacy-peer-deps && npm run build",
     "db:create": "createdb wallet_service",
     "db:drop": "dropdb wallet_service",
     "db:reset": "npm run db:drop && npm run db:create",
@@ -21,6 +22,7 @@
   "description": "",
   "dependencies": {
     "@types/pg": "^8.15.6",
+    "pg-native": "^3.0.0",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
