@@ -43,7 +43,7 @@ const createIndexes = async () => {
     const indexes = [
       // Users table indexes
       `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
-      `CREATE INDEX IF NOT EXISTS idx_users_google_id ON users("googleId")`,
+      `CREATE INDEX IF NOT EXISTS idx_users_google_id ON users("google_Id")`,
       
       // Wallets table indexes
       `CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets("userId")`,
