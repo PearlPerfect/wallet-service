@@ -20,7 +20,7 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors(corsOptions));
 app.use(helmet());
-app.use(morgan('dev')); // Use 'dev' for development for cleaner logs
+app.use(morgan('dev'));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -33,7 +33,9 @@ app.get('/health', (req, res) => {
     status: 'OK', 
     timestamp: new Date().toISOString(),
     service: 'Wallet Service',
-    version: '1.0.0'
+    version: '1.0.0',
+    node_env: process.env.NODE_ENV,
+    database_connected: true
   });
 });
 
@@ -47,7 +49,8 @@ app.get('/', (req, res) => {
       authentication: '/auth',
       api_keys: '/keys',
       wallet: '/wallet'
-    }
+    },
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -81,49 +84,27 @@ app.use((req: express.Request, res: express.Response) => {
   });
 });
 
-// Start server
 const startServer = async () => {
   try {
     console.log('🔄 Connecting to database...');
-    
-    // Sync database (force: true only for development, false for production)
-    await syncDatabase(process.env.NODE_ENV === 'development');
+
+    await syncDatabase(false);
     console.log('✅ Database synchronized successfully');
 
-    app.listen(PORT, () => {
-      console.log(`
+    // Only start listening if not on Vercel
+    if (process.env.VERCEL !== '1') {
+      app.listen(PORT, () => {
+        console.log(`
 🚀 Server running on port ${PORT}
 📚 API Documentation: http://localhost:${PORT}/api-docs
-
-Available endpoints:
-- GET  /                - Welcome page
-- GET  /health          - Health check
-- GET  /api-docs        - Swagger documentation
-
-- GET  /auth/google     - Google OAuth
-- POST /auth/test-login - Test login
-- GET  /auth/me         - Get current user
-
-- POST /keys/create     - Create API key
-- POST /keys/rollover   - Rollover expired key
-- GET  /keys            - List API keys
-
-- POST /wallet/deposit  - Initialize deposit
-- GET  /wallet/balance  - Get balance
-- POST /wallet/transfer - Transfer funds
-      `);
-    });
+`);
+      });
+    }
   } catch (error: any) {
     console.error('❌ Failed to start server:', error.message);
-    console.log('\n💡 Troubleshooting tips:');
-    console.log('1. Make sure PostgreSQL is running:');
-    console.log('   Windows: net start postgresql-x64-16');
-    console.log('   Linux/Mac: sudo service postgresql start');
-    console.log('2. Create the database manually:');
-    console.log('   psql -U postgres');
-    console.log('   CREATE DATABASE wallet_service;');
-    console.log('3. Check your .env file credentials');
-    process.exit(1);
+    if (process.env.VERCEL !== '1') {
+      process.exit(1);
+    }
   }
 };
 
