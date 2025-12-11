@@ -7,7 +7,7 @@ import jwtService from '../utils/jwt';
 const router = Router();
 
 // Apply rate limiting to auth endpoints
-router.use(authLimiter);
+// router.use(authLimiter);
 
 /**
  * @swagger
