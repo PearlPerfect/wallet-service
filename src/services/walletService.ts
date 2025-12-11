@@ -74,8 +74,9 @@ class WalletService {
         throw new Error('Sender wallet not found');
       }
 
-      // Check sufficient balance
-      if (!(await senderWallet.hasSufficientBalance(amount))) {
+      // Check sufficient balance with proper decimal handling
+      const senderBalance = parseFloat(senderWallet.balance.toString());
+      if (senderBalance < amount) {
         throw new Error('Insufficient balance');
       }
 
@@ -94,9 +95,15 @@ class WalletService {
         throw new Error('Cannot transfer to yourself');
       }
 
-      // Perform transfer
-      await senderWallet.debit(amount);
-      await recipientWallet.credit(amount);
+      // Perform transfer with proper decimal handling
+      const newSenderBalance = parseFloat((senderBalance - amount).toFixed(2));
+      senderWallet.balance = newSenderBalance;
+      await senderWallet.save({ transaction: t });
+
+      const recipientBalance = parseFloat(recipientWallet.balance.toString());
+      const newRecipientBalance = parseFloat((recipientBalance + amount).toFixed(2));
+      recipientWallet.balance = newRecipientBalance;
+      await recipientWallet.save({ transaction: t });
 
       // Create transaction records for both sender and recipient
       const senderTransaction = await Transaction.create(
@@ -108,6 +115,12 @@ class WalletService {
           senderWalletNumber: senderWallet.walletNumber,
           recipientWalletNumber: recipientWallet.walletNumber,
           description: description || `Transfer to ${recipientWalletNumber}`,
+          metadata: JSON.stringify({
+            senderBalanceBefore: senderBalance,
+            senderBalanceAfter: newSenderBalance,
+            recipientBalanceBefore: recipientBalance,
+            recipientBalanceAfter: newRecipientBalance
+          })
         },
         { transaction: t }
       );
@@ -121,6 +134,10 @@ class WalletService {
           senderWalletNumber: senderWallet.walletNumber,
           recipientWalletNumber: recipientWallet.walletNumber,
           description: `Transfer from ${senderWallet.walletNumber}`,
+          metadata: JSON.stringify({
+            recipientBalanceBefore: recipientBalance,
+            recipientBalanceAfter: newRecipientBalance
+          })
         },
         { transaction: t }
       );
@@ -201,7 +218,13 @@ class WalletService {
       throw new Error('Wallet not found');
     }
     
-    await wallet.debit(amount);
+    const balance = parseFloat(wallet.balance.toString());
+    if (balance < amount) {
+      throw new Error('Insufficient balance');
+    }
+    
+    wallet.balance = parseFloat((balance - amount).toFixed(2));
+    await wallet.save();
     
     await Transaction.create({
       userId,
@@ -209,6 +232,10 @@ class WalletService {
       amount,
       status: TransactionStatus.SUCCESS,
       description,
+      metadata: JSON.stringify({
+        balanceBefore: balance,
+        balanceAfter: wallet.balance
+      })
     });
   }
 
@@ -218,7 +245,9 @@ class WalletService {
       throw new Error('Wallet not found');
     }
     
-    await wallet.credit(amount);
+    const balance = parseFloat(wallet.balance.toString());
+    wallet.balance = parseFloat((balance + amount).toFixed(2));
+    await wallet.save();
     
     await Transaction.create({
       userId,
@@ -226,6 +255,10 @@ class WalletService {
       amount,
       status: TransactionStatus.SUCCESS,
       description,
+      metadata: JSON.stringify({
+        balanceBefore: balance,
+        balanceAfter: wallet.balance
+      })
     });
   }
 }

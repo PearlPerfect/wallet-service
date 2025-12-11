@@ -73,13 +73,43 @@ export class WalletController {
   }
 
   static async handleWebhook(req: Request, res: Response) {
+    console.log('📋 Webhook Headers:', JSON.stringify(req.headers, null, 2));
+    
     try {
       const signature = req.headers['x-paystack-signature'] as string;
       
-      // Log all headers for debugging
-      console.log('📋 Webhook Headers:', JSON.stringify(req.headers, null, 2));
+      // Validate request body exists
+      if (!req.body || Object.keys(req.body).length === 0) {
+        console.log('⚠️ Empty webhook body - likely CORS preflight or browser request');
+        
+        // Check if this is a CORS preflight or browser request
+        const userAgent = req.headers['user-agent'] || '';
+        if (userAgent.includes('Mozilla') && req.method === 'POST' && req.headers['content-length'] === '0') {
+          console.log('🛡️ Browser request detected - returning success to prevent CORS issues');
+          return res.status(200).json({ 
+            status: true, 
+            message: 'Webhook endpoint active (browser request ignored)' 
+          });
+        }
+        
+        // Return 200 to Paystack even if body is empty
+        return res.status(200).json({ 
+          status: false, 
+          message: 'Empty webhook body' 
+        });
+      }
+
       console.log('📦 Webhook Body:', JSON.stringify(req.body, null, 2));
       
+      // Validate that body has required structure
+      if (!req.body.event || !req.body.data) {
+        console.error('❌ Invalid webhook structure:', req.body);
+        return res.status(200).json({ 
+          status: false, 
+          message: 'Invalid webhook structure' 
+        });
+      }
+
       const result = await paystackService.handleWebhook(req.body, signature);
       
       if (result.success) {
@@ -307,7 +337,7 @@ export class WalletController {
       
       res.json({
         success: true,
-        balance,
+        balance: parseFloat(balance.toFixed(2)),
         currency: 'NGN',
       });
     } catch (error: any) {
@@ -414,7 +444,7 @@ export class WalletController {
         success: true,
         wallet: {
           wallet_number: wallet.walletNumber,
-          balance: wallet.balance,
+          balance: parseFloat(wallet.balance.toString()).toFixed(2),
           currency: 'NGN',
           created_at: wallet.createdAt,
         },

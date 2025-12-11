@@ -9,6 +9,14 @@ const router = Router();
 router.use(apiLimiter);
 router.use(validateBodySize);
 
+// Handle CORS preflight for webhook endpoint
+router.options('/paystack/webhook', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, x-paystack-signature');
+  res.status(200).end();
+});
+
 /**
  * @swagger
  * /wallet/deposit:

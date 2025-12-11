@@ -154,6 +154,13 @@ class PaystackService {
   ): Promise<{ success: boolean; message: string }> {
     try {
       console.log('🔄 ========== WEBHOOK RECEIVED ==========');
+      
+      // Validate body structure
+      if (!body || typeof body !== 'object') {
+        console.error('❌ Invalid webhook body:', body);
+        return { success: false, message: 'Invalid webhook body' };
+      }
+      
       console.log('📧 Event:', body.event);
       console.log('🔗 Reference:', body.data?.reference);
       console.log('💰 Amount:', body.data?.amount);
@@ -173,14 +180,14 @@ class PaystackService {
       if (shouldVerifySignature) {
         if (!signature) {
           console.error('❌ Missing webhook signature');
-          throw new Error('Missing signature');
+          return { success: false, message: 'Missing signature' };
         }
         
         // Verify webhook signature
         const isValid = await this.verifySignature(body, signature);
         if (!isValid) {
           console.error('❌ Invalid webhook signature');
-          throw new Error('Invalid webhook signature');
+          return { success: false, message: 'Invalid webhook signature' };
         }
         console.log('✅ Webhook signature verified');
       } else {
@@ -189,6 +196,11 @@ class PaystackService {
 
       const event = body.event;
       const data = body.data;
+
+      if (!event || !data) {
+        console.error('❌ Missing event or data in webhook');
+        return { success: false, message: 'Missing event or data in webhook' };
+      }
 
       console.log(`🎯 Processing Paystack webhook event: ${event}`);
 
@@ -245,7 +257,7 @@ class PaystackService {
   private async processSuccessfulCharge(data: any) {
     console.log('💸 Processing successful charge:', {
       reference: data.reference,
-      amount: data.amount / 100,
+      amount: data.amount,
       status: data.status
     });
     
@@ -277,21 +289,29 @@ class PaystackService {
     // Update transaction status
     await transaction.updateStatus(TransactionStatus.SUCCESS, data);
 
-    // Credit wallet
+    // Credit wallet - Paystack amount is in kobo, convert to Naira
     const wallet = await Wallet.findOne({
       where: { userId: transaction.userId },
     });
 
     if (wallet) {
+      // Convert amount from kobo to Naira (divide by 100)
+      const depositAmountInNaira = parseFloat(data.amount) / 100;
       const oldBalance = parseFloat(wallet.balance.toString());
-      await wallet.credit(transaction.amount);
-      const newBalance = parseFloat(wallet.balance.toString());
+      
+      // Calculate new balance properly
+      const newBalance = oldBalance + depositAmountInNaira;
+      
+      // Update wallet with proper decimal places
+      wallet.balance = parseFloat(newBalance.toFixed(2));
+      await wallet.save();
       
       console.log(`✅ Wallet ${wallet.id} credited:`, {
-        amount: transaction.amount,
-        oldBalance,
-        newBalance,
-        difference: newBalance - oldBalance
+        amountInKobo: data.amount,
+        amountInNaira: depositAmountInNaira,
+        oldBalance: oldBalance.toFixed(2),
+        newBalance: wallet.balance.toFixed(2),
+        difference: (wallet.balance - oldBalance).toFixed(2)
       });
       
       // Also update the transaction with wallet info
@@ -299,7 +319,9 @@ class PaystackService {
         ...(transaction.metadata ? JSON.parse(transaction.metadata) : {}),
         walletId: wallet.id,
         walletNumber: wallet.walletNumber,
-        creditedAt: new Date().toISOString()
+        creditedAt: new Date().toISOString(),
+        paystackAmountInKobo: data.amount,
+        depositAmountInNaira: depositAmountInNaira
       });
       await transaction.save();
     } else {
@@ -363,13 +385,13 @@ class PaystackService {
 
       if (wallet) {
         const oldBalance = parseFloat(wallet.balance.toString());
-        await wallet.credit(transaction.amount);
-        const newBalance = parseFloat(wallet.balance.toString());
+        wallet.balance = parseFloat((oldBalance + transaction.amount).toFixed(2));
+        await wallet.save();
         
         console.log(`🔄 Wallet ${wallet.id} refunded:`, {
           amount: transaction.amount,
-          oldBalance,
-          newBalance,
+          oldBalance: oldBalance.toFixed(2),
+          newBalance: wallet.balance.toFixed(2),
           reason: 'transfer_failed'
         });
       }
@@ -400,13 +422,13 @@ class PaystackService {
 
       if (wallet) {
         const oldBalance = parseFloat(wallet.balance.toString());
-        await wallet.credit(transaction.amount);
-        const newBalance = parseFloat(wallet.balance.toString());
+        wallet.balance = parseFloat((oldBalance + transaction.amount).toFixed(2));
+        await wallet.save();
         
         console.log(`🔄 Wallet ${wallet.id} refunded:`, {
           amount: transaction.amount,
-          oldBalance,
-          newBalance,
+          oldBalance: oldBalance.toFixed(2),
+          newBalance: wallet.balance.toFixed(2),
           reason: 'transfer_reversed'
         });
       }

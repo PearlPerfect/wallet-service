@@ -53,22 +53,25 @@ class Wallet extends Model {
   // Helper method to check if balance is sufficient
   async hasSufficientBalance(amount: number): Promise<boolean> {
     const wallet = await Wallet.findByPk(this.id);
-    return parseFloat(wallet?.balance.toString() || '0') >= amount;
+    const balance = parseFloat(wallet?.balance.toString() || '0');
+    return balance >= amount;
   }
 
   // Helper method to debit wallet
   async debit(amount: number): Promise<void> {
-    if (!(await this.hasSufficientBalance(amount))) {
+    const balance = parseFloat(this.balance.toString());
+    if (balance < amount) {
       throw new Error('Insufficient balance');
     }
     
-    this.balance = parseFloat(this.balance.toString()) - amount;
+    this.balance = parseFloat((balance - amount).toFixed(2));
     await this.save();
   }
 
   // Helper method to credit wallet
   async credit(amount: number): Promise<void> {
-    this.balance = parseFloat(this.balance.toString()) + amount;
+    const balance = parseFloat(this.balance.toString());
+    this.balance = parseFloat((balance + amount).toFixed(2));
     await this.save();
   }
 
